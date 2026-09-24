@@ -1,0 +1,15 @@
+# PyTorch (CPU wheels from PyPI). For a CUDA build, install from the
+# PyTorch index instead, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch
+torchvision
+
+# OpenCV. Use the headless build inside a container — it drops the GUI
+# dependencies (cv2.imshow) you can't use over a devcontainer anyway.
+opencv-python-headless
+
+numpy
+
+# Dev tooling
+pytest
+ruff

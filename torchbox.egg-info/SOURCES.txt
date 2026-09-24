@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+torchbox/__init__.py
+torchbox/__main__.py
+torchbox/cli.py
+torchbox.egg-info/PKG-INFO
+torchbox.egg-info/SOURCES.txt
+torchbox.egg-info/dependency_links.txt
+torchbox.egg-info/entry_points.txt
+torchbox.egg-info/requires.txt
+torchbox.egg-info/top_level.txt

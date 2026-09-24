@@ -1,0 +1,34 @@
+# torchbox
+
+A PyTorch + OpenCV project.
+
+## Usage
+
+```bash
+python3 -m torchbox --name Ryan
+# or, once installed:
+torchbox --name Ryan
+```
+
+Train the MNIST model, optionally starting from an existing checkpoint:
+
+```bash
+python3 -m torchbox mnist --train --save-model models/model.pt
+python3 -m torchbox mnist --train --load-model models/model.pt --save-model models/model.pt
+```
+
+Run inference on an image. Inference is the default mode and uses
+`models/model.pt` when `--load-model` is omitted:
+
+```bash
+python3 -m torchbox mnist --input frame.png
+python3 -m torchbox mnist --infer --load-model models/weights.pt --input frame.png
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+ruff check .
+```

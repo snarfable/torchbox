@@ -1,0 +1,38 @@
+{
+	"name": "PyTorch + OpenCV",
+	"build": {
+		"context": "..",
+		"dockerfile": "Dockerfile"
+	},
+	// Uncomment to enable NVIDIA GPU access (requires nvidia-container-toolkit on the host).
+	// "runArgs": ["--gpus", "all"],
+	"runArgs": [
+		"--device=/dev/video0",
+		"--device=/dev/video1",
+		"--device=/dev/video2",
+		"--device=/dev/video3",
+		"--volume=/tmp/.X11-unix:/tmp/.X11-unix"
+	],
+	"containerEnv": {
+		"DISPLAY": "${localEnv:DISPLAY}"
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-toolsai.jupyter",
+				"charliermarsh.ruff"
+			],
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.testing.pytestEnabled": true
+			}
+		}
+	},
+	"postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+	"remoteUser": "vscode"
+}

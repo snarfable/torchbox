@@ -1,0 +1,2 @@
+[console_scripts]
+torchbox = torchbox.cli:main

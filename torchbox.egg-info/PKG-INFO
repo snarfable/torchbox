@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: torchbox
+Version: 0.1.0
+Summary: A PyTorch + OpenCV project.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch
+Requires-Dist: torchvision
+Requires-Dist: opencv-python-headless
+Requires-Dist: numpy
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+
+# torchbox
+
+A PyTorch + OpenCV project.
+
+## Usage
+
+```bash
+python3 -m torchbox --name Ryan
+# or, once installed:
+torchbox --name Ryan
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+ruff check .
+```

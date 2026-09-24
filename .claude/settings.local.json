@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m torchbox)",
+      "Bash(python3 -m torchbox --name Ryan)",
+      "Bash(python3 -m torchbox --version)",
+      "Bash(pip install *)",
+      "Bash(torchbox --version)",
+      "Bash(torchbox --name Ryan)",
+      "Bash(python3 -c \"import torch; print\\('torch', torch.__version__\\)\")",
+      "Bash(python3 -m torchbox hello --name Ryan)",
+      "Bash(python3 -m torchbox mnist --help)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(python3 -c ' *)",
+      "Bash(pip uninstall *)",
+      "Bash(python3 -m torchbox.mnist --help)",
+      "Read(//tmp/**)",
+      "Bash(python3 -c \"import torch; print\\('CUDA available:', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(python3 -m torchbox.mnist --epochs 1 --save-model /tmp/mnist_cycle.pt)",
+      "Bash(break)",
+      "Bash(python3 -m torchbox.mnist --load-model /tmp/mnist_cycle.pt --epochs 0)"
+    ]
+  }
+}

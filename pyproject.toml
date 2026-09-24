@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchbox"
+version = "0.1.0"
+description = "A PyTorch + OpenCV project."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "opencv-python-headless",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+torchbox = "torchbox.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["torchbox*"]
