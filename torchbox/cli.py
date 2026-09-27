@@ -33,12 +33,24 @@ def main(argv: list[str] | None = None) -> int:
         add_help=False,
     )
 
+    # `torchbox yolo ...` — forwards remaining args to the YOLO detector.
+    subparsers.add_parser(
+        "yolo",
+        help="train or run inference with the YOLO shape detector",
+        add_help=False,
+    )
+
     args, extra = parser.parse_known_args(argv)
 
     if args.command == "mnist":
         from torchbox.mnist import main as mnist_main
 
         return mnist_main(extra)
+
+    if args.command == "yolo":
+        from torchbox.yolo import main as yolo_main
+
+        return yolo_main(extra)
 
     if args.command == "hello":
         print(f"Hello, {args.name}! torchbox {__version__} is ready.")

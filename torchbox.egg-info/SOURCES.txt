@@ -3,6 +3,7 @@ pyproject.toml
 torchbox/__init__.py
 torchbox/__main__.py
 torchbox/cli.py
+torchbox/mnist.py
 torchbox.egg-info/PKG-INFO
 torchbox.egg-info/SOURCES.txt
 torchbox.egg-info/dependency_links.txt

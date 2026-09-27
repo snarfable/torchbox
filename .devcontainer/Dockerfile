@@ -20,5 +20,6 @@ RUN python -m pip install --no-cache-dir \
 	torch \
 	torchvision \
 	opencv-python-headless \
-	numpy
+	numpy \
+	anthropic
 

@@ -13,6 +13,7 @@ dependencies = [
     "torchvision",
     "opencv-python-headless",
     "numpy",
+    "anthropic"
 ]
 
 [project.optional-dependencies]

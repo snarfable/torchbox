@@ -18,7 +18,10 @@
       "Bash(python3 -c \"import torch; print\\('CUDA available:', torch.cuda.is_available\\(\\)\\)\")",
       "Bash(python3 -m torchbox.mnist --epochs 1 --save-model /tmp/mnist_cycle.pt)",
       "Bash(break)",
-      "Bash(python3 -m torchbox.mnist --load-model /tmp/mnist_cycle.pt --epochs 0)"
+      "Bash(python3 -m torchbox.mnist --load-model /tmp/mnist_cycle.pt --epochs 0)",
+      "Bash(python3 -c \"import cv2; print\\('cv2', cv2.__version__\\)\")",
+      "Bash(python3 -m torchbox.mnist --input x.png --cam-input 2)",
+      "Bash(python3 -m torchbox.mnist --infer)"
     ]
   }
 }

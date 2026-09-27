@@ -12,6 +12,10 @@ Run inference for an image (inference is the default mode)::
 
     python3 -m torchbox.mnist --load-model models/model.pt --input frame.png
 
+Run inference on a frame captured from a webcam by index::
+
+    python3 -m torchbox.mnist --load-model models/model.pt --cam-input 2
+
 Load weights, keep training, then re-save::
 
     python3 -m torchbox.mnist --load-model mnist_cnn.pt --epochs 2 --save-model mnist_cnn.pt
@@ -24,10 +28,9 @@ from __future__ import annotations
 import argparse
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 from PIL import Image
+from torch import nn, optim
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -101,19 +104,56 @@ def test(model: nn.Module, device: torch.device, loader: DataLoader) -> float:
     return accuracy
 
 
+def predict(
+    model: nn.Module,
+    device: torch.device,
+    image: Image.Image,
+    transform: transforms.Compose,
+) -> int:
+    """Predict the digit in a single grayscale PIL image."""
+    data = transform(image).unsqueeze(0).to(device)
+    model.eval()
+    with torch.no_grad():
+        return model(data).argmax(dim=1).item()
+
+
 def infer(
     model: nn.Module,
     device: torch.device,
     input_path: str,
     transform: transforms.Compose,
 ) -> int:
-    """Predict the digit in one image and print the result."""
+    """Predict the digit in one image file and print the result."""
     image = Image.open(input_path).convert("L")
-    data = transform(image).unsqueeze(0).to(device)
-    model.eval()
-    with torch.no_grad():
-        prediction = model(data).argmax(dim=1).item()
+    prediction = predict(model, device, image, transform)
     print(f"Inference for {input_path}: {prediction}")
+    return prediction
+
+
+def infer_from_camera(
+    model: nn.Module,
+    device: torch.device,
+    cam_index: int,
+    transform: transforms.Compose,
+) -> int:
+    """Capture one frame from the webcam at ``cam_index`` and classify it."""
+    # Imported lazily so training/file inference works without OpenCV present.
+    import cv2
+
+    cap = cv2.VideoCapture(cam_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open webcam at index {cam_index}")
+    try:
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    if not ok or frame is None:
+        raise RuntimeError(f"failed to capture a frame from webcam index {cam_index}")
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    image = Image.fromarray(gray)
+    prediction = predict(model, device, image, transform)
+    print(f"Inference for webcam index {cam_index}: {prediction}")
     return prediction
 
 
@@ -145,7 +185,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="load weights from PATH before training or inference",
     )
-    parser.add_argument("--input", metavar="PATH", help="image to classify in inference mode")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--input", metavar="PATH", help="image file to classify in inference mode")
+    source.add_argument(
+        "--cam-input",
+        type=int,
+        metavar="INDEX",
+        help="capture one frame from the webcam at INDEX to classify (e.g. --cam-input 2)",
+    )
     return parser
 
 
@@ -164,8 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         build_arg_parser().error("--save-model implies --train and cannot be used with --infer")
     if not training:
         model_path = args.load_model or "models/model.pt"
-        if not args.input:
-            build_arg_parser().error("inference requires --input PATH")
+        if not args.input and args.cam_input is None:
+            build_arg_parser().error("inference requires --input PATH or --cam-input INDEX")
     else:
         model_path = args.load_model
 
@@ -192,7 +239,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Loaded weights from {model_path}")
 
     if not training:
-        infer(model, device, args.input, inference_transform)
+        if args.cam_input is not None:
+            infer_from_camera(model, device, args.cam_input, inference_transform)
+        else:
+            infer(model, device, args.input, inference_transform)
         return 0
 
     train_dataset = datasets.MNIST(args.data_dir, train=True, download=True, transform=transform)
