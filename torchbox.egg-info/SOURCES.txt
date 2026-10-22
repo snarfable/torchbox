@@ -1,9 +1,14 @@
 README.md
 pyproject.toml
+tests/test_finance.py
+tests/test_yolo.py
 torchbox/__init__.py
 torchbox/__main__.py
 torchbox/cli.py
+torchbox/finance.py
+torchbox/live_yolo.py
 torchbox/mnist.py
+torchbox/yolo.py
 torchbox.egg-info/PKG-INFO
 torchbox.egg-info/SOURCES.txt
 torchbox.egg-info/dependency_links.txt

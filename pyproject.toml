@@ -11,9 +11,11 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
     "torchvision",
-    "opencv-python-headless",
+    "opencv-python",
     "numpy",
-    "anthropic"
+    "anthropic",
+    "requests",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]

@@ -40,6 +40,18 @@ def main(argv: list[str] | None = None) -> int:
         add_help=False,
     )
 
+    subparsers.add_parser(
+        "live-yolo",
+        help="run live YOLO detection from a video source",
+    )
+
+    # `torchbox finance ...` — forwards remaining args to the finance trainer/predictor.
+    subparsers.add_parser(
+        "finance",
+        help="train or run inference with the wide-window RNN stock prediction model",
+        add_help=False,
+    )
+
     args, extra = parser.parse_known_args(argv)
 
     if args.command == "mnist":
@@ -51,6 +63,17 @@ def main(argv: list[str] | None = None) -> int:
         from torchbox.yolo import main as yolo_main
 
         return yolo_main(extra)
+
+    if args.command == "live-yolo":
+        from torchbox.live_yolo import main as live_yolo_main
+
+        live_yolo_main()
+        return 0
+
+    if args.command == "finance":
+        from torchbox.finance import main as finance_main
+
+        return finance_main(extra)
 
     if args.command == "hello":
         print(f"Hello, {args.name}! torchbox {__version__} is ready.")

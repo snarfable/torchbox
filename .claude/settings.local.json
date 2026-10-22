@@ -1,4 +1,7 @@
 {
+  "env": {
+    "ANTHROPIC_WORKSPACE_ID": ""
+  },
   "permissions": {
     "allow": [
       "Bash(python3 -m torchbox)",
@@ -21,7 +24,10 @@
       "Bash(python3 -m torchbox.mnist --load-model /tmp/mnist_cycle.pt --epochs 0)",
       "Bash(python3 -c \"import cv2; print\\('cv2', cv2.__version__\\)\")",
       "Bash(python3 -m torchbox.mnist --input x.png --cam-input 2)",
-      "Bash(python3 -m torchbox.mnist --infer)"
+      "Bash(python3 -m torchbox.mnist --infer)",
+      "Bash(pip list *)",
+      "Bash(python -c \"import cv2; print\\('cv2', cv2.__version__\\); print\\(cv2.__file__\\)\")",
+      "Bash(python *)"
     ]
   }
 }

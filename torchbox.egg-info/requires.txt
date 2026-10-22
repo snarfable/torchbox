@@ -1,8 +1,10 @@
 torch
 torchvision
-opencv-python-headless
+opencv-python
 numpy
 anthropic
+requests
+matplotlib
 
 [dev]
 pytest

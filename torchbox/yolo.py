@@ -491,6 +491,31 @@ def infer(
     cv2.imwrite(output_path, annotated_cv)
     print(f"Annotated output saved to {output_path}")
 
+def infer_in_memory(
+    model: nn.Module,
+    device: torch.device,
+    image: np.ndarray,
+    conf_threshold: float = 0.5,
+    iou_threshold: float = 0.5,
+) -> np.ndarray:
+    """Predicts objects in a file, prints results, and saves the annotated image."""
+    import cv2
+
+    image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    boxes, scores, class_ids = predict(
+        model,
+        device,
+        image_pil,
+        conf_threshold=conf_threshold,
+        iou_threshold=iou_threshold,
+    )
+
+    #print(f"Inference for image: found {len(boxes)} object(s).")
+    #for idx, (box, score, class_id) in enumerate(zip(boxes, scores, class_ids)):
+    #    box_int = [int(v) for v in box]
+    #    print(f"  Object {idx}: {CLASSES[class_id]} (Confidence: {score:.2f}), Box: {box_int}")
+
+    return draw_detections(image, boxes, scores, class_ids)
 
 def infer_from_camera(
     model: nn.Module,

@@ -1,5 +1,5 @@
-# Debian-based Python image. Swap for an nvidia/cuda image if you need GPU builds.
-FROM mcr.microsoft.com/devcontainers/python:3.11-bookworm
+# Debian 13 (Trixie) Python image. Swap for an nvidia/cuda image if you need GPU builds.
+FROM mcr.microsoft.com/devcontainers/python:3.11-trixie
 
 # System libraries that OpenCV needs at runtime (libGL, glib, etc.).
 # Without these, `import cv2` fails with "libGL.so.1: cannot open shared object file".
@@ -7,6 +7,9 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		libgl1 \
 		libglib2.0-0 \
+		xauth \
+		x11-apps \
+		vim-gtk3 \
 		ffmpeg \
 		libtorch-dev \
 	&& apt-get clean \
@@ -20,7 +23,6 @@ RUN python -m pip install --upgrade pip
 RUN python -m pip install --no-cache-dir \
 	torch \
 	torchvision \
-	opencv-python-headless \
+	opencv-python \
 	numpy \
 	anthropic
-

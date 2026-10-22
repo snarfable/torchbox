@@ -11,11 +11,21 @@
 		"--device=/dev/video1",
 		"--device=/dev/video2",
 		"--device=/dev/video3",
-		"--volume=/tmp/.X11-unix:/tmp/.X11-unix"
+		"--net=host",                                  // Required to easily link to local sockets
+		"--ipc=host",                                  // Required for Shared Memory extensions (MIT-SHM)
+		"--device=/dev/dri:/dev/dri"                  // For GPU hardware acceleration
 	],
 	"containerEnv": {
-		"DISPLAY": "${localEnv:DISPLAY}"
+		"DISPLAY": "${localEnv:DISPLAY}",
+		"XAUTHORITY": "/tmp/.Xauthority",
+		"WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
+		"XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}"
 	},
+	"mounts": [
+		"source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+		"source=${localEnv:HOME}/.Xauthority,target=/tmp/.Xauthority,type=bind,readonly",
+		"source=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},target=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},type=bind,consistency=cached"
+	],
 	"features": {
 		"ghcr.io/devcontainers/features/git:1": {}
 	},
@@ -33,6 +43,6 @@
 			}
 		}
 	},
-	"postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+	"postCreateCommand": "pip install --no-cache-dir -r .devcontainer/requirements.txt",
 	"remoteUser": "vscode"
 }
