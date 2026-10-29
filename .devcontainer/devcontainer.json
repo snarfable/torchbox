@@ -7,10 +7,8 @@
 	// Uncomment to enable NVIDIA GPU access (requires nvidia-container-toolkit on the host).
 	// "runArgs": ["--gpus", "all"],
 	"runArgs": [
-		"--device=/dev/video0",
-		"--device=/dev/video1",
-		"--device=/dev/video2",
-		"--device=/dev/video3",
+		"--device-cgroup-rule=c 81:* rmw",             // Allow access to video4linux devices (webcams) if present
+		"-v", "/dev:/dev",                             // Expose host /dev so hot-plugged cameras are visible
 		"--net=host",                                  // Required to easily link to local sockets
 		"--ipc=host",                                  // Required for Shared Memory extensions (MIT-SHM)
 		"--device=/dev/dri:/dev/dri"                  // For GPU hardware acceleration
