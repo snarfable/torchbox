@@ -1,16 +1,28 @@
 import cv2
 from torch import device, load, cuda
 from torchbox.yolo import YoloNet, infer_in_memory as infer
+import argparse
 
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Configure options for live YOLO detection.")
+    parser.add_argument("--cam-input", type=int, default=0)
+    parser.add_argument("--model-path", type=str, default="models/yolo.pt")
+    parser.add_argument("--grid-size", type=int, default=4)
+    parser.add_argument("--classes", type=str, nargs='+', default=["Circle", "Rectangle", "Triangle"])
+    return parser
 
 def main():
+    # Parse command-line arguments
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
     # Set number of classes and grid size for YOLO model (adjust as needed)
-    CLASSES = ["Circle", "Rectangle", "Triangle"]
+    CLASSES = args.classes
     NUM_CLASSES = len(CLASSES)
-    S = 4  # Grid size (S x S)
+    S = args.grid_size  # Grid size (S x S)
 
     # Set the model path (adjust to your trained model's path)
-    model_path = "models/yolo.pt"  # Replace with the actual path to your trained YOLO model
+    model_path = args.model_path  # Replace with the actual path to your trained YOLO model
 
     # Set the device for inference (CPU or GPU)
     use_device = device("cuda" if cuda.is_available() else "cpu")
@@ -21,7 +33,7 @@ def main():
     model.load_state_dict(state_dict)
 
     # 1. Initialize video source (0 for default webcam, or path to video file)
-    cap = cv2.VideoCapture(2)
+    cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
         print("Error: Could not open video source.")

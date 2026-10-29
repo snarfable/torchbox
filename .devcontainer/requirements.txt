@@ -13,6 +13,7 @@ scipy
 matplotlib
 seaborn
 requests
+coinbase-advanced-py
 
 # Dev tooling
 pytest

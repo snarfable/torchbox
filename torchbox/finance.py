@@ -26,10 +26,99 @@ import sys
 
 import numpy as np
 import requests
+import json
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
+from pathlib import Path
 
+def fetch_btc_data(
+    use_direct_url: bool = True,
+    **keys
+) -> np.ndarray:
+    """
+        Keys: product_id="BTC-USD", n=100, granularity="ONE_HOUR"
+    """
+    if use_direct_url:
+        # Query public spot price for BTC-USD
+        url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+        response = requests.get(url)
+
+        if response.status_code == 200:
+            data = response.json()
+            price = data["data"]["amount"]
+            currency = data["data"]["currency"]
+            print(f"The current Bitcoin price is {price} {currency}")
+        else:
+            print("Failed to fetch price:", response.status_code)
+        return np.zeros(10)
+    else:
+        from datetime import datetime, timedelta, timezone
+        from coinbase.rest import RESTClient
+
+        # product_id="BTC-USD", n=100, granularity="ONE_HOUR"
+        if "product_id" in keys:
+            product_id = keys["product_id"]
+        if "n" in keys:
+            n = keys["n"]
+        if "granularity" in keys:
+            granularity = keys["granularity"]
+
+        # Map granularity string to seconds to calculate bounds
+        granularity_seconds = {
+            "ONE_MINUTE": 60,
+            "FIVE_MINUTE": 300,
+            "FIFTEEN_MINUTE": 900,
+            "ONE_HOUR": 3600,
+            "SIX_HOUR": 21600,
+            "ONE_DAY": 86400
+        }
+        
+        # Initialize the client (Public endpoints do not require active API keys)
+        client = None
+        config_path = Path.home() / ".config" / "apikeys.json"
+        if config_path.exists():
+            with config_path.open() as f:
+                config_json = json.load(f)
+                if "apikeys" in config_json \
+                    and "coinbase" in config_json["apikeys"] \
+                    and "mainkey01" in config_json["apikeys"]["coinbase"]:
+                    client = RESTClient(api_key=config_json["apikeys"]["coinbase"]["mainkey01"]["name"],
+                                        api_secret=config_json["apikeys"]["coinbase"]["mainkey01"]["key"])
+                    print(f"Loaded API key from {str(config_path)}")
+                else:
+                    print("Could not find Coinbase Advanced API key in JSON structure")
+                    return np.array([])
+        else:
+            client = RESTClient(
+                api_key="organizations/24022f45-7d07-4580-82d5-c8f64c912957/apiKeys/9b9d7d4d-2fa0-4825-bc11-22ff7d0fe916",
+                api_secret="jXqjL+5AxWnEfGi4fE8/QyHxwv9dtjfQZGk+vIZgr2JyVAGhhSOn4vHnB2iomlCnAVcjko5sGYPte/gL76s6aw==")
+            print("Loading default API key")
+    
+        # Calculate timestamps
+        end_time = datetime.now(timezone.utc)
+        lookback = timedelta(seconds=granularity_seconds[granularity] * n)
+        start_time = end_time - lookback
+
+        # Convert datetime objects to string Unix timestamps as expected by the SDK
+        start_str = str(int(start_time.timestamp()))
+        end_str = str(int(end_time.timestamp()))
+
+        # Fetch data using the SDK method
+        response = client.get_candles(
+            product_id=product_id,
+            start=start_str,
+            end=end_str,
+            granularity=granularity
+        )
+        
+        # Access the candles list from the returned object/dictionary
+        candles = response["candles"]
+        
+        # Chronological sort (Coinbase returns them newest first)
+        candles.reverse()
+        
+        return np.array([candle.open for candle in candles[:n]])
 
 def fetch_stock_data(
     ticker: str = "AAPL",
@@ -459,6 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Disables CUDA training",
     )
+    parser.add_argument(
+        "--granularity",
+        type=str,
+        default="ONE_MINUTE",
+        help="Set the training data granularity to extract"
+    )
     return parser
 
 
@@ -476,7 +571,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Fetching historical stock data for '{args.ticker}'...")
         try:
-            prices = fetch_stock_data(ticker=args.ticker)
+            #prices = fetch_stock_data(ticker=args.ticker)
+            prices = fetch_btc_data(False, product_id="BTC-USD", n=350, granularity=args.granularity)
             print(f"Successfully fetched {len(prices)} price data points for {args.ticker}.")
         except (requests.RequestException, ValueError) as e:
             print(f"Failed to fetch stock data for {args.ticker} ({e}). Falling back to synthetic data.")
