@@ -31,6 +31,10 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from coinbase.rest import RESTClient
+
+MAX_REQUEST_SAMPLES = 350
 
 def fetch_btc_data(
     use_direct_url: bool = True,
@@ -53,8 +57,6 @@ def fetch_btc_data(
             print("Failed to fetch price:", response.status_code)
         return np.zeros(10)
     else:
-        from datetime import datetime, timedelta, timezone
-        from coinbase.rest import RESTClient
 
         # product_id="BTC-USD", n=100, granularity="ONE_HOUR"
         if "product_id" in keys:
@@ -100,25 +102,30 @@ def fetch_btc_data(
         lookback = timedelta(seconds=granularity_seconds[granularity] * n)
         start_time = end_time - lookback
 
-        # Convert datetime objects to string Unix timestamps as expected by the SDK
-        start_str = str(int(start_time.timestamp()))
-        end_str = str(int(end_time.timestamp()))
-
         # Fetch data using the SDK method
-        response = client.get_candles(
-            product_id=product_id,
-            start=start_str,
-            end=end_str,
-            granularity=granularity
-        )
+        candles = []
+        candles_times = []
+        start_time_int = int(start_time.timestamp())
+        end_time_int = int(end_time.timestamp())
+        for start, end in [(i, min(i + MAX_REQUEST_SAMPLES, end_time_int)) for i in range(int(start_time_int), end_time_int, MAX_REQUEST_SAMPLES)]:
+            start_str = str(start)
+            end_str = str(end)
+            response = client.get_candles(
+                product_id=product_id,
+                start=start_str,
+                end=end_str,
+                granularity=granularity
+            )
         
-        # Access the candles list from the returned object/dictionary
-        candles = response["candles"]
+            # Access the candles list from the returned object/dictionary
+            these_candles = response["candles"]
+            these_candles.reverse()
+            candles = candles + [candle.open for candle in these_candles]
+            candles_times = candles_times + [candle.start for candle in these_candles]
         
-        # Chronological sort (Coinbase returns them newest first)
-        candles.reverse()
-        
-        return np.array([candle.open for candle in candles[:n]])
+        if not all((candles_times[i] < candles_times[i+1]) for i in range(n - 1)):
+            raise ValueError("Sample timestamps are not consecutive")
+        return np.array(candles)
 
 def fetch_stock_data(
     ticker: str = "AAPL",
@@ -182,12 +189,56 @@ def generate_synthetic_stock_data(
     return prices
 
 
+def build_window_features(
+    window: np.ndarray,
+    scales: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    """Builds a multi-channel feature matrix for a single raw price window.
+
+    Channel 0 is always the window normalized as a return relative to its first
+    price (leak-free: uses only in-window information). When ``scales`` is
+    provided, one additional channel per scale ``s`` is appended, holding the
+    ``s``-step trailing return at each position -- this gives the model
+    multi-time-scale context at a constant (short) window length instead of
+    requiring a very long window.
+
+    Args:
+        window: 1D array of raw prices, shape (window_size,).
+        scales: Optional tuple of look-back horizons (in steps) for the extra
+            return channels. Scales >= window length are skipped.
+
+    Returns:
+        Float32 array of shape (window_size, 1 + num_valid_scales).
+    """
+    window = np.asarray(window, dtype=np.float32)
+    base = window[0] if window[0] != 0 else 1.0
+    channels = [(window - base) / base]
+
+    for s in scales or ():
+        if s < 1 or s >= len(window):
+            continue
+        ret = np.zeros_like(window)
+        denom = window[:-s]
+        denom = np.where(denom == 0, 1.0, denom)
+        ret[s:] = (window[s:] - window[:-s]) / denom
+        channels.append(ret)
+
+    return np.stack(channels, axis=-1).astype(np.float32)  # (W, num_channels)
+
+
 class StockTimeSeriesDataset(Dataset):
     """Dataset for wide-window stock time series forecasting.
 
-    Given a 1D sequence of prices and a window size W:
-    - Input window X_i: prices [p_i, ..., p_{i+W-1}] (optionally normalized w.r.t. window start).
-    - Target y_i: 1.0 if p_{i+W} > p_{i+W-1} (price boost in immediate next step), else 0.0.
+    Given a 1D sequence of prices, a window size W, a smoothing horizon P and a
+    dead-band epsilon:
+    - Input window X_i: prices [p_i, ..., p_{i+W-1}], encoded as one or more
+      feature channels by :func:`build_window_features`.
+    - Future value f_i: mean (or EMA) of the next P prices
+      [p_{i+W}, ..., p_{i+W+P-1}]. Smoothing over P cancels tick noise so the
+      target reflects genuine short-horizon drift rather than a single noisy tick.
+    - Target y_i: 1.0 if the smoothed future exceeds the last window price by
+      more than the dead-band, else 0.0. Samples whose relative move falls inside
+      the dead-band are dropped as noise (not used for training/eval).
     """
 
     def __init__(
@@ -195,43 +246,97 @@ class StockTimeSeriesDataset(Dataset):
         prices: np.ndarray,
         window_size: int = 30,
         normalize: bool = True,
+        smooth_p: int = 1,
+        dead_band: float = 0.0,
+        smooth_mode: str = "mean",
+        scales: tuple[int, ...] | None = None,
     ) -> None:
         """
         Args:
             prices: 1D array of stock prices.
             window_size: Number of time steps in the wide input window.
-            normalize: If True, normalize input window by price returns relative to the first step.
+            normalize: If True, normalize input window by returns relative to the
+                first step. (Always on when scales are used; kept for API parity.)
+            smooth_p: Number of future steps P to smooth over when forming the
+                target. P=1 reproduces the original immediate-next-step target.
+            dead_band: Minimum absolute relative move (e.g. 0.001 = 0.1%) for a
+                sample to count. Smaller moves are discarded as noise.
+            smooth_mode: 'mean' for a simple average of the next P prices, or
+                'ema' for an exponentially weighted average (recent steps weighted
+                more heavily).
+            scales: Optional look-back horizons for extra return channels. When
+                None, a single normalized-price channel is used (input_size=1).
         """
+        if smooth_p < 1:
+            raise ValueError(f"smooth_p must be >= 1, got {smooth_p}.")
+        if dead_band < 0:
+            raise ValueError(f"dead_band must be >= 0, got {dead_band}.")
+        if smooth_mode not in ("mean", "ema"):
+            raise ValueError(f"smooth_mode must be 'mean' or 'ema', got '{smooth_mode}'.")
+
         self.window_size = window_size
         self.normalize = normalize
+        self.smooth_p = smooth_p
+        self.dead_band = dead_band
+        self.smooth_mode = smooth_mode
+        self.scales = tuple(scales) if scales else ()
 
         prices = np.asarray(prices, dtype=np.float32)
-        if len(prices) <= window_size:
+        if len(prices) < window_size + smooth_p:
             raise ValueError(
-                f"Historical prices length ({len(prices)}) must be greater than window_size ({window_size})."
+                f"Historical prices length ({len(prices)}) must be at least "
+                f"window_size + smooth_p ({window_size} + {smooth_p})."
             )
+
+        # EMA weights over the P future steps (most recent step weighted highest).
+        if smooth_mode == "ema" and smooth_p > 1:
+            alpha = 2.0 / (smooth_p + 1.0)
+            offsets = np.arange(smooth_p, dtype=np.float32)  # 0 == nearest future step
+            ema_weights = (1.0 - alpha) ** offsets
+            ema_weights = ema_weights / ema_weights.sum()
+        else:
+            ema_weights = None
 
         samples_list = []
         targets_list = []
 
-        num_samples = len(prices) - window_size
+        num_samples = len(prices) - window_size - smooth_p + 1
         for i in range(num_samples):
             window = prices[i : i + window_size].copy()
-            next_price = prices[i + window_size]
+            future = prices[i + window_size : i + window_size + smooth_p]
             last_window_price = window[-1]
 
-            # Price boost condition: immediate next price > last price in the window
-            target = 1.0 if next_price > last_window_price else 0.0
+            if ema_weights is not None:
+                future_val = float(np.dot(future, ema_weights))
+            else:
+                future_val = float(future.mean())
 
-            if normalize:
-                base_price = window[0] if window[0] != 0 else 1.0
-                window = (window - base_price) / base_price
+            base = last_window_price if last_window_price != 0 else 1.0
+            rel_move = (future_val - last_window_price) / base
 
-            samples_list.append(window[:, np.newaxis])  # shape: (window_size, 1)
+            # Dead-band: discard sub-threshold moves as noise rather than training on them.
+            if abs(rel_move) < dead_band:
+                continue
+
+            target = 1.0 if rel_move > 0 else 0.0
+
+            if normalize or self.scales:
+                features = build_window_features(window, self.scales)
+            else:
+                features = window[:, np.newaxis]
+
+            samples_list.append(features)
             targets_list.append(target)
+
+        if not samples_list:
+            raise ValueError(
+                "No samples survived the dead-band filter; lower --dead-band or "
+                "provide more data."
+            )
 
         self.samples = np.array(samples_list, dtype=np.float32)
         self.targets = np.array(targets_list, dtype=np.float32)
+        self.input_size = self.samples.shape[-1]
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -364,17 +469,53 @@ def train_epoch(
     return running_loss / max(total_samples, 1)
 
 
+def _roc_auc(probs: np.ndarray, targets: np.ndarray) -> float:
+    """Computes ROC AUC via the Mann-Whitney rank statistic (ties averaged).
+
+    Dependency-free alternative to sklearn.metrics.roc_auc_score. Returns NaN if
+    either class is absent (AUC undefined).
+    """
+    n_pos = int((targets == 1).sum())
+    n_neg = int((targets == 0).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+
+    order = np.argsort(probs, kind="mergesort")
+    ranks = np.empty(len(probs), dtype=np.float64)
+    ranks[order] = np.arange(1, len(probs) + 1, dtype=np.float64)
+
+    # Average ranks within tied probability groups.
+    sorted_probs = probs[order]
+    i = 0
+    while i < len(sorted_probs):
+        j = i
+        while j + 1 < len(sorted_probs) and sorted_probs[j + 1] == sorted_probs[i]:
+            j += 1
+        if j > i:
+            ranks[order[i : j + 1]] = (i + 1 + j + 1) / 2.0
+        i = j + 1
+
+    sum_pos_ranks = ranks[targets == 1].sum()
+    return (sum_pos_ranks - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> tuple[float, float]:
-    """Evaluates model on validation/test set. Returns (loss, accuracy)."""
+) -> dict[str, float]:
+    """Evaluates the model and returns a dict of metrics.
+
+    Keys: loss, accuracy, baseline (majority-class accuracy), precision, recall,
+    auc, pos_rate. Accuracy is only meaningful relative to ``baseline`` -- a model
+    that always predicts the majority class scores ``baseline`` while learning
+    nothing, which is the usual trap in price-direction prediction.
+    """
     model.eval()
     running_loss = 0.0
-    correct = 0
-    total_samples = 0
+    all_probs: list[np.ndarray] = []
+    all_targets: list[np.ndarray] = []
 
     with torch.no_grad():
         for data, target in loader:
@@ -383,13 +524,40 @@ def evaluate(
             loss = criterion(output, target)
 
             running_loss += loss.item() * len(data)
-            predictions = (output >= 0.5).float()
-            correct += int((predictions == target).sum().item())
-            total_samples += len(data)
+            all_probs.append(output.squeeze(-1).cpu().numpy())
+            all_targets.append(target.squeeze(-1).cpu().numpy())
 
-    avg_loss = running_loss / max(total_samples, 1)
-    accuracy = correct / max(total_samples, 1)
-    return avg_loss, accuracy
+    if not all_targets:
+        return {
+            "loss": 0.0, "accuracy": 0.0, "baseline": 0.0,
+            "precision": 0.0, "recall": 0.0, "auc": float("nan"), "pos_rate": 0.0,
+        }
+
+    probs = np.concatenate(all_probs)
+    targets = np.concatenate(all_targets)
+    preds = (probs >= 0.5).astype(np.float32)
+    total = len(targets)
+
+    accuracy = float((preds == targets).mean())
+    pos_rate = float(targets.mean())
+    # Majority-class baseline: accuracy of always predicting the more common label.
+    baseline = max(pos_rate, 1.0 - pos_rate)
+
+    tp = float(((preds == 1) & (targets == 1)).sum())
+    fp = float(((preds == 1) & (targets == 0)).sum())
+    fn = float(((preds == 0) & (targets == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+    return {
+        "loss": running_loss / max(total, 1),
+        "accuracy": accuracy,
+        "baseline": baseline,
+        "precision": precision,
+        "recall": recall,
+        "auc": _roc_auc(probs, targets),
+        "pos_rate": pos_rate,
+    }
 
 
 def plot_financial_data(
@@ -473,6 +641,12 @@ def plot_financial_data(
     plt.close(fig)
     print(f"Saved financial data sample plot to {output_path}")
 
+def parse_tuple(value):
+    try:
+        # Split the string by commas and convert elements to integers
+        return tuple(map(int, value.split(',')))
+    except ValueError:
+        raise argparse.ArgumentTypeError("Tuple must be comma-separated integers (e.g., '1,2,3')")
 
 def build_parser() -> argparse.ArgumentParser:
     """Builds the argument parser for finance CLI."""
@@ -554,6 +728,44 @@ def build_parser() -> argparse.ArgumentParser:
         default="ONE_MINUTE",
         help="Set the training data granularity to extract"
     )
+    parser.add_argument(
+        "--smooth-p",
+        type=int,
+        default=1,
+        help="Smooth the target over the next P future steps (default: 1 = immediate next step)",
+    )
+    parser.add_argument(
+        "--smooth-mode",
+        type=str,
+        choices=["mean", "ema"],
+        default="mean",
+        help="How to smooth the next P steps for the target: 'mean' or 'ema' (default: mean)",
+    )
+    parser.add_argument(
+        "--dead-band",
+        type=float,
+        default=0.0,
+        help="Discard samples whose smoothed relative move is below this threshold "
+             "(e.g. 0.001 = 0.1%%) as noise (default: 0.0 = keep all)",
+    )
+    parser.add_argument(
+        "--multi-scale",
+        action="store_true",
+        help="Add multi-time-scale trailing-return channels to each window "
+             "(see --scales) instead of a single normalized-price channel",
+    )
+    parser.add_argument(
+        "--scales",
+        type=parse_tuple,
+        default=(1, 5, 15),
+        help="Look-back horizons (in steps) for --multi-scale return channels (default: 1 5 15)",
+    )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=700,
+        help="Number of samples to load from stock/crypto API"    
+    )
     return parser
 
 
@@ -572,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Fetching historical stock data for '{args.ticker}'...")
         try:
             #prices = fetch_stock_data(ticker=args.ticker)
-            prices = fetch_btc_data(False, product_id="BTC-USD", n=350, granularity=args.granularity)
+            prices = fetch_btc_data(False, product_id=args.ticker, n=args.samples, granularity=args.granularity)
             print(f"Successfully fetched {len(prices)} price data points for {args.ticker}.")
         except (requests.RequestException, ValueError) as e:
             print(f"Failed to fetch stock data for {args.ticker} ({e}). Falling back to synthetic data.")
@@ -587,20 +799,35 @@ def main(argv: list[str] | None = None) -> int:
             title=title,
         )
 
-    dataset = StockTimeSeriesDataset(prices, window_size=args.window_size, normalize=True)
+    scales = args.scales if args.multi_scale else None
+    dataset = StockTimeSeriesDataset(
+        prices,
+        window_size=args.window_size,
+        normalize=True,
+        smooth_p=args.smooth_p,
+        dead_band=args.dead_band,
+        smooth_mode=args.smooth_mode,
+        scales=scales,
+    )
+    print(
+        f"Built {len(dataset)} samples | input_size={dataset.input_size} | "
+        f"smooth_p={args.smooth_p} ({args.smooth_mode}) | dead_band={args.dead_band}"
+    )
 
-    # Train / validation split (80% train, 20% val)
+    # Chronological train / validation split (first 80% train, last 20% val).
+    # A time-ordered split avoids leaking future windows into training, which a
+    # shuffled split would do and which silently inflates validation metrics.
     train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    train_dataset = torch.utils.data.Subset(dataset, list(range(train_size)))
+    val_dataset = torch.utils.data.Subset(dataset, list(range(train_size, len(dataset))))
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
     model = WideWindowRNN(
-        input_size=1,
+        input_size=dataset.input_size,
         hidden_size=64,
-        num_layers=2,
+        num_layers=3,
         window_size=args.window_size,
         rnn_type=args.rnn_type,
     ).to(device)
@@ -619,15 +846,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Training WideWindowRNN ({args.rnn_type.upper()}) for {args.epochs} epochs on {device}...")
         for epoch in range(1, args.epochs + 1):
             train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
-            val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+            metrics = evaluate(model, val_loader, criterion, device)
             if epoch == 1 or epoch % max(1, args.epochs // 5) == 0 or epoch == args.epochs:
                 print(
                     f"Epoch {epoch:2d}/{args.epochs:2d} | "
-                    f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc * 100:.2f}%"
+                    f"Train Loss: {train_loss:.4f} | Val Loss: {metrics['loss']:.4f} | "
+                    f"Val Acc: {metrics['accuracy'] * 100:.2f}% (baseline {metrics['baseline'] * 100:.2f}%) | "
+                    f"AUC: {metrics['auc']:.3f}"
                 )
 
-    val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-    print(f"\nFinal Validation Loss: {val_loss:.4f} | Final Validation Accuracy: {val_acc * 100:.2f}%")
+    m = evaluate(model, val_loader, criterion, device)
+    edge = (m["accuracy"] - m["baseline"]) * 100
+    print(
+        f"\nFinal Validation metrics:\n"
+        f"  Loss        : {m['loss']:.4f}\n"
+        f"  Accuracy    : {m['accuracy'] * 100:.2f}%\n"
+        f"  Baseline    : {m['baseline'] * 100:.2f}%  (majority class; pos_rate={m['pos_rate'] * 100:.2f}%)\n"
+        f"  Edge vs base: {edge:+.2f} pts  <-- the number that actually matters\n"
+        f"  Precision   : {m['precision'] * 100:.2f}%\n"
+        f"  Recall      : {m['recall'] * 100:.2f}%\n"
+        f"  ROC AUC     : {m['auc']:.3f}  (0.5 = no skill)"
+    )
 
     # Run sample inference on the latest price window
     latest_window = dataset.samples[-1]  # shape: (window_size, 1)

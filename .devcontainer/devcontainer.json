@@ -20,6 +20,7 @@
 		"XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}"
 	},
 	"mounts": [
+		//"source=${localEnv:HOME}/.config/apikeys.json,target=/home/vscode/.config/apikeys.json",
 		"source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
 		"source=${localEnv:HOME}/.Xauthority,target=/tmp/.Xauthority,type=bind,readonly",
 		"source=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},target=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},type=bind,consistency=cached"
