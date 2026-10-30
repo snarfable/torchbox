@@ -25,4 +25,5 @@ RUN python -m pip install --no-cache-dir \
 	torchvision \
 	opencv-python \
 	numpy \
-	anthropic
+	anthropic \
+	google-colab-cli

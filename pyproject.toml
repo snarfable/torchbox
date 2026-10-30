@@ -17,7 +17,8 @@ dependencies = [
     "requests",
     "matplotlib",
     "tqdm",
-    "coinbase-advanced-py"
+    "coinbase-advanced-py",
+    "google-colab-cli"
 ]
 
 [project.optional-dependencies]

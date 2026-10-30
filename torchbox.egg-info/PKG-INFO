@@ -11,6 +11,9 @@ Requires-Dist: numpy
 Requires-Dist: anthropic
 Requires-Dist: requests
 Requires-Dist: matplotlib
+Requires-Dist: tqdm
+Requires-Dist: coinbase-advanced-py
+Requires-Dist: google-colab-cli
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: ruff; extra == "dev"

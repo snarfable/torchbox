@@ -15,6 +15,7 @@ seaborn
 requests
 tqdm
 coinbase-advanced-py
+google-colab-cli
 
 # Dev tooling
 pytest

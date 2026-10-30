@@ -6,6 +6,8 @@ anthropic
 requests
 tqdm
 matplotlib
+coinbase-advanced-py
+google-colab-cli
 
 [dev]
 pytest

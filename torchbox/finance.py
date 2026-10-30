@@ -27,6 +27,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from google.colab import userdata
 
 import numpy as np
 import requests
@@ -134,7 +135,13 @@ def fetch_btc_data(
         # Initialize the client (Public endpoints do not require active API keys)
         client = None
         config_path = Path.home() / ".config" / "apikeys.json"
-        if config_path.exists():
+        if userdata is not None and "coinbase_api_key" in userdata and "coinbase_api_secret" in userdata:
+            client = RESTClient(
+                api_key=userdata["coinbase_api_key"],
+                api_secret=userdata["coinbase_api_secret"]
+            )
+            print("Loaded API key from colab secrets")
+        elif config_path.exists():
             with config_path.open() as f:
                 config_json = json.load(f)
                 if (
