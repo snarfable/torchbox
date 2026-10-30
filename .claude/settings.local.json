@@ -27,7 +27,13 @@
       "Bash(python3 -m torchbox.mnist --infer)",
       "Bash(pip list *)",
       "Bash(python -c \"import cv2; print\\('cv2', cv2.__version__\\); print\\(cv2.__file__\\)\")",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(python3 -m torchbox.finance --synthetic --window-size 40 --epochs 3 --smooth-p 5 --smooth-mode ema --dead-band 0.002 --multi-scale --scales 1 5 15)",
+      "Bash(pip show *)",
+      "Bash(python3 -m torchbox.finance --synthetic --window-size 30 --epochs 1)",
+      "Bash(python3 -m torchbox.finance --synthetic --window-size 30 --epochs 3 --smooth-p 5 --smooth-mode ema --dead-band 0.001 --multi-scale --walk-forward 5)",
+      "Bash(python3 -m torchbox.finance --synthetic --window-size 30 --epochs 2 --walk-forward 4 --wf-scheme sliding --wf-train-size 120)",
+      "Bash(python3 -m torchbox.finance --synthetic --window-size 30 --epochs 2 --smooth-p 3)"
     ]
   }
 }

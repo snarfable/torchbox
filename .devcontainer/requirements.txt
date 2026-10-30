@@ -13,6 +13,7 @@ scipy
 matplotlib
 seaborn
 requests
+tqdm
 coinbase-advanced-py
 
 # Dev tooling

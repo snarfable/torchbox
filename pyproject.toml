@@ -16,6 +16,7 @@ dependencies = [
     "anthropic",
     "requests",
     "matplotlib",
+    "tqdm",
     "coinbase-advanced-py"
 ]
 

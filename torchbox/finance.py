@@ -21,28 +21,81 @@ All commands also work via the torchbox CLI:
 from __future__ import annotations
 
 import argparse
+import json
+import tqdm
 import os
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import requests
-import json
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
-from pathlib import Path
-from datetime import datetime, timedelta, timezone
-from coinbase.rest import RESTClient
+
+try:
+    from coinbase.rest import RESTClient
+except ImportError:
+    RESTClient = None
 
 MAX_REQUEST_SAMPLES = 350
+DEFAULT_CACHE_FILE = "data/btc_cache.npy"
+
+
+def load_cached_btc_data(cache_path: str | Path) -> np.ndarray:
+    """Loads cached BTC time series data from a local file (.npy, .csv, or .json)."""
+    path = Path(cache_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Cache file not found: {path}")
+    if path.suffix == ".json":
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return np.asarray(data, dtype=np.float32)
+    elif path.suffix in (".csv", ".txt"):
+        return np.loadtxt(path, delimiter=",", dtype=np.float32)
+    else:
+        return np.asarray(np.load(path), dtype=np.float32)
+
+
+def save_cached_btc_data(cache_path: str | Path, data: np.ndarray) -> None:
+    """Saves BTC time series data to a local cache file (.npy, .csv, or .json)."""
+    path = Path(cache_path)
+    if path.parent and str(path.parent) != ".":
+        path.parent.mkdir(parents=True, exist_ok=True)
+    arr = np.asarray(data, dtype=np.float32)
+    if path.suffix == ".json":
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(arr.tolist(), f)
+    elif path.suffix in (".csv", ".txt"):
+        np.savetxt(path, arr, delimiter=",")
+    else:
+        np.save(path, arr)
+
 
 def fetch_btc_data(
     use_direct_url: bool = True,
-    **keys
+    cache_file: str | Path | None = DEFAULT_CACHE_FILE,
+    **keys,
 ) -> np.ndarray:
+    """Fetches BTC time series data, checking local cache file first.
+
+    Keys: product_id="BTC-USD", n=100, granularity="ONE_HOUR", cache_file=...
     """
-        Keys: product_id="BTC-USD", n=100, granularity="ONE_HOUR"
-    """
+    if "cache_file" in keys:
+        cache_file = keys["cache_file"]
+
+    # If a local cache file exists, load it directly without running fetch.
+    if cache_file is not None:
+        cache_path = Path(cache_file)
+        if not cache_path.exists() and cache_file == DEFAULT_CACHE_FILE:
+            alt_path = Path("btc_cache.npy")
+            if alt_path.exists():
+                cache_path = alt_path
+        if cache_path.exists():
+            print(f"Loading cached BTC data from {cache_path}...")
+            return load_cached_btc_data(cache_path)
+
     if use_direct_url:
         # Query public spot price for BTC-USD
         url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
@@ -57,14 +110,10 @@ def fetch_btc_data(
             print("Failed to fetch price:", response.status_code)
         return np.zeros(10)
     else:
-
         # product_id="BTC-USD", n=100, granularity="ONE_HOUR"
-        if "product_id" in keys:
-            product_id = keys["product_id"]
-        if "n" in keys:
-            n = keys["n"]
-        if "granularity" in keys:
-            granularity = keys["granularity"]
+        product_id = keys.get("product_id", "BTC-USD")
+        n = keys.get("n", 100)
+        granularity = keys.get("granularity", "ONE_HOUR")
 
         # Map granularity string to seconds to calculate bounds
         granularity_seconds = {
@@ -73,30 +122,41 @@ def fetch_btc_data(
             "FIFTEEN_MINUTE": 900,
             "ONE_HOUR": 3600,
             "SIX_HOUR": 21600,
-            "ONE_DAY": 86400
+            "ONE_DAY": 86400,
         }
-        
+
+        if RESTClient is None:
+            raise ImportError(
+                "coinbase-advanced-py is not installed. Install it via 'pip install coinbase-advanced-py' "
+                "or provide a local cache file."
+            )
+
         # Initialize the client (Public endpoints do not require active API keys)
         client = None
         config_path = Path.home() / ".config" / "apikeys.json"
         if config_path.exists():
             with config_path.open() as f:
                 config_json = json.load(f)
-                if "apikeys" in config_json \
-                    and "coinbase" in config_json["apikeys"] \
-                    and "mainkey01" in config_json["apikeys"]["coinbase"]:
-                    client = RESTClient(api_key=config_json["apikeys"]["coinbase"]["mainkey01"]["name"],
-                                        api_secret=config_json["apikeys"]["coinbase"]["mainkey01"]["key"])
-                    print(f"Loaded API key from {str(config_path)}")
+                if (
+                    "apikeys" in config_json
+                    and "coinbase" in config_json["apikeys"]
+                    and "mainkey01" in config_json["apikeys"]["coinbase"]
+                ):
+                    client = RESTClient(
+                        api_key=config_json["apikeys"]["coinbase"]["mainkey01"]["name"],
+                        api_secret=config_json["apikeys"]["coinbase"]["mainkey01"]["key"],
+                    )
+                    print(f"Loaded API key from {config_path!s}")
                 else:
                     print("Could not find Coinbase Advanced API key in JSON structure")
                     return np.array([])
         else:
             client = RESTClient(
                 api_key="organizations/24022f45-7d07-4580-82d5-c8f64c912957/apiKeys/9b9d7d4d-2fa0-4825-bc11-22ff7d0fe916",
-                api_secret="jXqjL+5AxWnEfGi4fE8/QyHxwv9dtjfQZGk+vIZgr2JyVAGhhSOn4vHnB2iomlCnAVcjko5sGYPte/gL76s6aw==")
+                api_secret="jXqjL+5AxWnEfGi4fE8/QyHxwv9dtjfQZGk+vIZgr2JyVAGhhSOn4vHnB2iomlCnAVcjko5sGYPte/gL76s6aw==",
+            )
             print("Loading default API key")
-    
+
         # Calculate timestamps
         end_time = datetime.now(timezone.utc)
         lookback = timedelta(seconds=granularity_seconds[granularity] * n)
@@ -107,25 +167,35 @@ def fetch_btc_data(
         candles_times = []
         start_time_int = int(start_time.timestamp())
         end_time_int = int(end_time.timestamp())
-        for start, end in [(i, min(i + MAX_REQUEST_SAMPLES, end_time_int)) for i in range(int(start_time_int), end_time_int, MAX_REQUEST_SAMPLES)]:
+        for start, end in tqdm.tqdm([
+            (i, min(i + MAX_REQUEST_SAMPLES, end_time_int))
+            for i in range(int(start_time_int), end_time_int, MAX_REQUEST_SAMPLES)
+        ]):
             start_str = str(start)
             end_str = str(end)
             response = client.get_candles(
                 product_id=product_id,
                 start=start_str,
                 end=end_str,
-                granularity=granularity
+                granularity=granularity,
             )
-        
+
             # Access the candles list from the returned object/dictionary
             these_candles = response["candles"]
             these_candles.reverse()
             candles = candles + [candle.open for candle in these_candles]
             candles_times = candles_times + [candle.start for candle in these_candles]
-        
-        if not all((candles_times[i] < candles_times[i+1]) for i in range(n - 1)):
+
+        if not all((candles_times[i] < candles_times[i + 1]) for i in range(len(candles_times) - 1)):
             raise ValueError("Sample timestamps are not consecutive")
-        return np.array(candles)
+
+        prices = np.array(candles, dtype=np.float32)
+        if cache_file is not None and len(prices) > 0:
+            cache_path = Path(cache_file)
+            save_cached_btc_data(cache_path, prices)
+            print(f"Cached {len(prices)} BTC data points to {cache_path}.")
+
+        return prices
 
 def fetch_stock_data(
     ticker: str = "AAPL",
@@ -299,6 +369,7 @@ class StockTimeSeriesDataset(Dataset):
 
         samples_list = []
         targets_list = []
+        returns_list = []
 
         num_samples = len(prices) - window_size - smooth_p + 1
         for i in range(num_samples):
@@ -327,6 +398,9 @@ class StockTimeSeriesDataset(Dataset):
 
             samples_list.append(features)
             targets_list.append(target)
+            # Realized relative move over the smoothed horizon -- the P&L a trade
+            # entered at the last window price would capture (before costs).
+            returns_list.append(rel_move)
 
         if not samples_list:
             raise ValueError(
@@ -336,6 +410,7 @@ class StockTimeSeriesDataset(Dataset):
 
         self.samples = np.array(samples_list, dtype=np.float32)
         self.targets = np.array(targets_list, dtype=np.float32)
+        self.returns = np.array(returns_list, dtype=np.float32)
         self.input_size = self.samples.shape[-1]
 
     def __len__(self) -> int:
@@ -560,6 +635,256 @@ def evaluate(
     }
 
 
+def collect_probs(model: nn.Module, loader: DataLoader, device: torch.device) -> np.ndarray:
+    """Returns the model's output probabilities for a loader, in iteration order.
+
+    Use with a ``shuffle=False`` loader so the probabilities line up positionally
+    with the dataset indices behind it.
+    """
+    model.eval()
+    chunks: list[np.ndarray] = []
+    with torch.no_grad():
+        for data, _ in loader:
+            data = data.to(device)
+            chunks.append(model(data).squeeze(-1).cpu().numpy())
+    return np.concatenate(chunks) if chunks else np.array([], dtype=np.float32)
+
+
+def profitability_report(
+    probs: np.ndarray,
+    returns: np.ndarray,
+    fee_bps: float = 10.0,
+    slippage_bps: float = 5.0,
+    threshold: float = 0.5,
+    allow_short: bool = False,
+) -> dict[str, float]:
+    """Cost-aware P&L sanity check for a signal over its realized returns.
+
+    Each sample is treated as an independent round-trip trade: enter when the
+    model's probability clears ``threshold`` (and, with ``allow_short``, enter the
+    opposite side otherwise), capture that sample's realized relative move, and pay
+    a round-trip cost of ``2 * (fee_bps + slippage_bps)``. This is a signal-level
+    sanity check, not a full mark-to-market backtest -- the stride-1 samples
+    overlap in time, so compounded figures are indicative, not executable.
+
+    The ``always-long`` benchmark applies the same accounting to a position that is
+    long every sample, so the comparison is apples-to-apples: the model only earns
+    its keep if selective trading beats simply being long after costs.
+
+    Args:
+        probs: Model probabilities, aligned with ``returns``.
+        returns: Realized relative moves per sample (e.g. dataset.returns[idx]).
+        fee_bps: Taker fee per side, in basis points (1 bp = 0.01%).
+        slippage_bps: Assumed slippage per side, in basis points.
+        threshold: Probability cutoff for taking a long position.
+        allow_short: If True, go short (-1) below threshold instead of flat (0).
+
+    Returns:
+        Dict of P&L metrics (fractional returns; *_bps fields in basis points).
+    """
+    probs = np.asarray(probs, dtype=np.float64)
+    returns = np.asarray(returns, dtype=np.float64)
+    round_trip_cost = 2.0 * (fee_bps + slippage_bps) / 1e4
+
+    long_mask = probs >= threshold
+    signal = np.where(long_mask, 1.0, -1.0 if allow_short else 0.0)
+    traded = signal != 0
+
+    gross = signal * returns
+    cost = np.abs(signal) * round_trip_cost
+    net = gross - cost
+    net_traded = net[traded]
+    n_trades = int(traded.sum())
+
+    strat_net = float(net.sum())
+    strat_equity = float(np.prod(1.0 + net_traded) - 1.0) if n_trades else 0.0
+    avg_trade_bps = float(net_traded.mean() * 1e4) if n_trades else 0.0
+    win_rate = float((net_traded > 0).mean()) if n_trades else 0.0
+    if n_trades > 1 and net_traded.std() > 0:
+        sharpe = float(net_traded.mean() / net_traded.std())
+    else:
+        sharpe = float("nan")
+
+    # Always-long benchmark under identical cost accounting.
+    bh_net = float((returns - round_trip_cost).sum())
+
+    return {
+        "net_return": strat_net,
+        "net_equity": strat_equity,
+        "avg_trade_bps": avg_trade_bps,
+        "win_rate": win_rate,
+        "sharpe": sharpe,
+        "n_trades": float(n_trades),
+        "n_samples": float(len(returns)),
+        "round_trip_bps": round_trip_cost * 1e4,
+        "benchmark_net": bh_net,
+        "excess_net": strat_net - bh_net,
+    }
+
+
+def walk_forward_folds(
+    n_samples: int,
+    n_folds: int,
+    scheme: str = "expanding",
+    embargo: int = 0,
+    train_size: int | None = None,
+) -> list[tuple[list[int], list[int]]]:
+    """Builds chronological train/test index folds for rolling-origin evaluation.
+
+    The sample timeline is divided into ``n_folds + 1`` equal blocks; the first
+    block seeds the initial training set and each subsequent block becomes one
+    test fold, always strictly later in time than its training data.
+
+    An ``embargo`` gap of samples is purged from the end of each training set so
+    that overlapping windows (which share prices with the test block's inputs or
+    target horizon) cannot leak across the boundary.
+
+    Args:
+        n_samples: Total number of chronologically-ordered samples.
+        n_folds: Number of test folds to produce.
+        scheme: 'expanding' grows the training set each fold; 'sliding' keeps a
+            fixed-size trailing training window (requires ``train_size``).
+        embargo: Samples to drop from the tail of each training set.
+        train_size: Fixed training length for the 'sliding' scheme.
+
+    Returns:
+        List of (train_indices, test_indices) tuples; folds too small to use are
+        skipped.
+    """
+    block = n_samples // (n_folds + 1)
+    if block < 1:
+        return []
+
+    folds: list[tuple[list[int], list[int]]] = []
+    for k in range(n_folds):
+        test_start = (k + 1) * block
+        test_end = n_samples if k == n_folds - 1 else test_start + block
+        train_end = max(0, test_start - embargo)
+
+        if scheme == "sliding" and train_size:
+            train_start = max(0, train_end - train_size)
+        else:
+            train_start = 0
+
+        if train_end - train_start < 1 or test_end - test_start < 1:
+            continue
+        folds.append((list(range(train_start, train_end)), list(range(test_start, test_end))))
+
+    return folds
+
+
+def run_fold(
+    dataset: Dataset,
+    train_idx: list[int],
+    val_idx: list[int],
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict[str, float]:
+    """Trains a fresh model on one fold and returns its validation metrics."""
+    train_loader = DataLoader(
+        torch.utils.data.Subset(dataset, train_idx), batch_size=args.batch_size, shuffle=True
+    )
+    val_loader = DataLoader(
+        torch.utils.data.Subset(dataset, val_idx), batch_size=args.batch_size, shuffle=False
+    )
+
+    model = WideWindowRNN(
+        input_size=dataset.input_size,
+        hidden_size=64,
+        num_layers=3,
+        window_size=args.window_size,
+        rnn_type=args.rnn_type,
+    ).to(device)
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    for _ in range(max(args.epochs, 1)):
+        train_epoch(model, train_loader, optimizer, criterion, device)
+
+    metrics = evaluate(model, val_loader, criterion, device)
+
+    # Cost-aware P&L on this fold's test block (val_loader is unshuffled, so the
+    # probabilities line up with dataset.returns[val_idx]).
+    probs = collect_probs(model, val_loader, device)
+    fold_returns = dataset.returns[val_idx]
+    metrics.update(
+        profitability_report(
+            probs,
+            fold_returns,
+            fee_bps=args.fee_bps,
+            slippage_bps=args.slippage_bps,
+            threshold=args.threshold,
+            allow_short=args.allow_short,
+        )
+    )
+    return metrics
+
+
+def walk_forward_evaluate(
+    dataset: Dataset,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict[str, float] | None:
+    """Runs rolling-origin cross-validation and prints per-fold + aggregate metrics.
+
+    Returns a dict of aggregate (mean) metrics, or None if no usable folds could
+    be constructed.
+    """
+    embargo = args.embargo if args.embargo >= 0 else (args.window_size + args.smooth_p - 1)
+    folds = walk_forward_folds(
+        len(dataset),
+        n_folds=args.walk_forward,
+        scheme=args.wf_scheme,
+        embargo=embargo,
+        train_size=args.wf_train_size,
+    )
+    if not folds:
+        print(
+            f"Walk-forward: not enough samples ({len(dataset)}) for {args.walk_forward} "
+            f"folds with embargo {embargo}; skipping."
+        )
+        return None
+
+    print(
+        f"\nRolling-origin evaluation: {len(folds)} folds | scheme={args.wf_scheme} | "
+        f"embargo={embargo} samples"
+    )
+    print(
+        f"  {'fold':>4} | {'train':>6} | {'test':>5} | {'acc':>6} | {'base':>6} | "
+        f"{'edge':>6} | {'auc':>5}"
+    )
+
+    per_fold: list[dict[str, float]] = []
+    for i, (train_idx, val_idx) in enumerate(folds, start=1):
+        m = run_fold(dataset, train_idx, val_idx, args, device)
+        m["edge"] = m["accuracy"] - m["baseline"]
+        per_fold.append(m)
+        print(
+            f"  {i:>4} | {len(train_idx):>6} | {len(val_idx):>5} | "
+            f"{m['accuracy'] * 100:>5.1f}% | {m['baseline'] * 100:>5.1f}% | "
+            f"{m['edge'] * 100:>+5.1f} | {m['auc']:>5.3f}"
+        )
+
+    def _agg(key: str) -> tuple[float, float]:
+        vals = np.array([f[key] for f in per_fold], dtype=np.float64)
+        vals = vals[~np.isnan(vals)]
+        if len(vals) == 0:
+            return float("nan"), float("nan")
+        return float(vals.mean()), float(vals.std())
+
+    acc_m, acc_s = _agg("accuracy")
+    edge_m, edge_s = _agg("edge")
+    auc_m, auc_s = _agg("auc")
+    print(
+        f"\n  Aggregate across {len(per_fold)} folds (mean +/- std):\n"
+        f"    Accuracy    : {acc_m * 100:.2f}% +/- {acc_s * 100:.2f}\n"
+        f"    Edge vs base: {edge_m * 100:+.2f} +/- {edge_s * 100:.2f} pts  "
+        f"<-- consistently > 0 across folds is what you want\n"
+        f"    ROC AUC     : {auc_m:.3f} +/- {auc_s:.3f}  (0.5 = no skill)"
+    )
+    return {"accuracy": acc_m, "edge": edge_m, "auc": auc_m}
+
+
 def plot_financial_data(
     prices: np.ndarray,
     window_size: int = 30,
@@ -764,7 +1089,70 @@ def build_parser() -> argparse.ArgumentParser:
         "--samples",
         type=int,
         default=700,
-        help="Number of samples to load from stock/crypto API"    
+        help="Number of samples to load from stock/crypto API"
+    )
+    parser.add_argument(
+        "--walk-forward",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Run rolling-origin (walk-forward) evaluation with N folds instead of trusting "
+             "a single split (default: 0 = off)",
+    )
+    parser.add_argument(
+        "--wf-scheme",
+        type=str,
+        choices=["expanding", "sliding"],
+        default="expanding",
+        help="Walk-forward training scheme: 'expanding' (growing history) or 'sliding' "
+             "(fixed trailing window) (default: expanding)",
+    )
+    parser.add_argument(
+        "--wf-train-size",
+        type=int,
+        default=None,
+        help="Fixed training length (in samples) for --wf-scheme sliding",
+    )
+    parser.add_argument(
+        "--embargo",
+        type=int,
+        default=-1,
+        help="Samples to purge between each walk-forward train/test boundary to prevent "
+             "overlapping-window leakage (default: -1 = auto = window_size + smooth_p - 1)",
+    )
+    parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=10.0,
+        help="Taker fee per side in basis points for the profitability check (default: 10 = 0.10%%)",
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=5.0,
+        help="Assumed slippage per side in basis points for the profitability check (default: 5 = 0.05%%)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Probability cutoff for taking a long position in the profitability check (default: 0.5)",
+    )
+    parser.add_argument(
+        "--allow-short",
+        action="store_true",
+        help="In the profitability check, go short below the threshold instead of flat",
+    )
+    parser.add_argument(
+        "--cache-file",
+        type=str,
+        default=DEFAULT_CACHE_FILE,
+        help=f"Path to local cache file for BTC time series data (default: {DEFAULT_CACHE_FILE})",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable loading from or saving to local cache file",
     )
     return parser
 
@@ -784,9 +1172,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Fetching historical stock data for '{args.ticker}'...")
         try:
             #prices = fetch_stock_data(ticker=args.ticker)
-            prices = fetch_btc_data(False, product_id=args.ticker, n=args.samples, granularity=args.granularity)
-            print(f"Successfully fetched {len(prices)} price data points for {args.ticker}.")
-        except (requests.RequestException, ValueError) as e:
+            cache_file = None if args.no_cache else args.cache_file
+            prices = fetch_btc_data(
+                False,
+                product_id=args.ticker,
+                n=args.samples,
+                granularity=args.granularity,
+                cache_file=cache_file,
+            )
+            print(f"Successfully loaded {len(prices)} price data points for {args.ticker}.")
+        except (requests.RequestException, ValueError, OSError, ImportError) as e:
             print(f"Failed to fetch stock data for {args.ticker} ({e}). Falling back to synthetic data.")
             prices = generate_synthetic_stock_data(num_days=500, initial_price=100.0)
 
@@ -813,6 +1208,15 @@ def main(argv: list[str] | None = None) -> int:
         f"Built {len(dataset)} samples | input_size={dataset.input_size} | "
         f"smooth_p={args.smooth_p} ({args.smooth_mode}) | dead_band={args.dead_band}"
     )
+
+    # Rolling-origin evaluation mode: trains a fresh model per fold across the
+    # timeline, so there is no single model to save/infer -- report and return.
+    if args.walk_forward > 0:
+        if args.epochs <= 0:
+            print("Walk-forward requires --epochs > 0 to train each fold; aborting.")
+            return 1
+        walk_forward_evaluate(dataset, args, device)
+        return 0
 
     # Chronological train / validation split (first 80% train, last 20% val).
     # A time-ordered split avoids leaking future windows into training, which a

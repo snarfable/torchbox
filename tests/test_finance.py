@@ -12,9 +12,12 @@ from torchbox.finance import (
     StockTimeSeriesDataset,
     WideWindowRNN,
     evaluate,
+    fetch_btc_data,
     fetch_stock_data,
     generate_synthetic_stock_data,
+    load_cached_btc_data,
     plot_financial_data,
+    save_cached_btc_data,
     train_epoch,
 )
 from torchbox.finance import (
@@ -48,7 +51,7 @@ def test_stock_time_series_dataset() -> None:
     assert target.item() in (0.0, 1.0)
 
     # Test error when prices length <= window_size
-    with pytest.raises(ValueError, match="must be greater than window_size"):
+    with pytest.raises(ValueError, match="must be at least window_size"):
         StockTimeSeriesDataset(prices[:10], window_size=15)
 
 
@@ -103,11 +106,11 @@ def test_train_and_evaluate_epoch() -> None:
     device = torch.device("cpu")
 
     loss_epoch1 = train_epoch(model, loader, optimizer, criterion, device)
-    val_loss, val_acc = evaluate(model, loader, criterion, device)
+    metrics = evaluate(model, loader, criterion, device)
 
     assert isinstance(loss_epoch1, float)
-    assert isinstance(val_loss, float)
-    assert 0.0 <= val_acc <= 1.0
+    assert isinstance(metrics["loss"], float)
+    assert 0.0 <= metrics["accuracy"] <= 1.0
 
 
 def test_fetch_stock_data_mocked() -> None:
@@ -143,6 +146,63 @@ def test_plot_financial_data(tmp_path: pytest.TempPath) -> None:
     assert (tmp_path / "plot.png").stat().st_size > 0
 
 
+def test_fetch_btc_data_loads_from_cache(tmp_path: pytest.TempPath) -> None:
+    """Verifies fetch_btc_data loads cached data if cache file exists without fetching."""
+    cached_prices = np.array([50000.0, 51000.0, 52000.0, 53000.0], dtype=np.float32)
+    cache_path = tmp_path / "btc_cache.npy"
+    save_cached_btc_data(cache_path, cached_prices)
+
+    with patch("torchbox.finance.RESTClient") as mock_client_cls, \
+         patch("requests.get") as mock_requests_get:
+        loaded = fetch_btc_data(False, cache_file=cache_path)
+        np.testing.assert_array_almost_equal(loaded, cached_prices)
+        mock_client_cls.assert_not_called()
+        mock_requests_get.assert_not_called()
+
+
+def test_fetch_btc_data_saves_to_cache(tmp_path: pytest.TempPath) -> None:
+    """Verifies fetch_btc_data fetches and caches data if cache file does not exist."""
+    cache_path = tmp_path / "cached_btc.npy"
+    assert not cache_path.exists()
+
+    candle1 = MagicMock(open="60000.0", start=100)
+    candle2 = MagicMock(open="61000.0", start=200)
+    mock_client = MagicMock()
+    mock_client.get_candles.return_value = {
+        "candles": [candle2, candle1]  # Returned in reverse order per Coinbase API convention
+    }
+
+    with patch("torchbox.finance.RESTClient", return_value=mock_client):
+        result = fetch_btc_data(
+            False,
+            cache_file=cache_path,
+            product_id="BTC-USD",
+            n=2,
+            granularity="ONE_MINUTE",
+        )
+        assert len(result) == 2
+        np.testing.assert_array_almost_equal(result, [60000.0, 61000.0])
+        assert cache_path.exists()
+
+        # Subsequent call should load from cache without calling get_candles again
+        mock_client.get_candles.reset_mock()
+        cached_result = fetch_btc_data(False, cache_file=cache_path)
+        np.testing.assert_array_almost_equal(cached_result, [60000.0, 61000.0])
+        mock_client.get_candles.assert_not_called()
+
+
+def test_cache_formats(tmp_path: pytest.TempPath) -> None:
+    """Verifies save_cached_btc_data and load_cached_btc_data support .npy, .csv, and .json."""
+    data = np.array([1.5, 2.5, 3.5], dtype=np.float32)
+
+    for ext in (".npy", ".csv", ".json"):
+        path = tmp_path / f"test_cache{ext}"
+        save_cached_btc_data(path, data)
+        assert path.exists()
+        loaded = load_cached_btc_data(path)
+        np.testing.assert_array_almost_equal(loaded, data)
+
+
 def test_finance_main_cli(tmp_path: pytest.TempPath) -> None:
     """Verifies end-to-end main CLI execution with synthetic data, --dump-samples, and weight saving/loading."""
     model_path = str(tmp_path / "model.pt")
@@ -167,3 +227,17 @@ def test_finance_main_cli(tmp_path: pytest.TempPath) -> None:
         "--load-model", model_path,
     ])
     assert exit_code_load == 0
+
+
+def test_finance_main_cli_with_cache(tmp_path: pytest.TempPath) -> None:
+    """Verifies CLI execution loading BTC data from cache file."""
+    cache_path = tmp_path / "btc_cache.npy"
+    data = generate_synthetic_stock_data(num_days=100, initial_price=50000.0, seed=42)
+    save_cached_btc_data(cache_path, data)
+
+    exit_code = finance_main([
+        "--cache-file", str(cache_path),
+        "--window-size", "15",
+        "--epochs", "1",
+    ])
+    assert exit_code == 0
