@@ -137,8 +137,8 @@ def fetch_btc_data(
         config_path = Path.home() / ".config" / "apikeys.json"
         if userdata is not None and "coinbase_api_key" in userdata and "coinbase_api_secret" in userdata:
             client = RESTClient(
-                api_key=userdata["coinbase_api_key"],
-                api_secret=userdata["coinbase_api_secret"]
+                api_key=userdata.get("coinbase_api_key"),
+                api_secret=userdata.get("coinbase_api_secret")
             )
             print("Loaded API key from colab secrets")
         elif config_path.exists():
