@@ -27,7 +27,8 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from google.colab import userdata
+#from google.colab import userdata
+userdata = None
 
 import numpy as np
 import requests
